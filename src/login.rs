@@ -92,11 +92,18 @@ impl Display for TargetCredentials {
 #[derive(Debug, Deserialize)]
 struct AdfsConfig {
     target_credentials: TargetCredentials,
+    account_id: Option<String>,
 }
 
 impl Display for AdfsConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return write!(f, "{}", self.target_credentials);
+        let account_id_export;
+        if let Some(account_id) = &self.account_id {
+            account_id_export = format!("export AWS_ACCOUNT_ID={account_id}");
+        } else {
+            account_id_export = "".to_string();
+        }
+        return write!(f, "{}\n{account_id_export}", self.target_credentials);
     }
 }
 
@@ -213,16 +220,15 @@ pub async fn login_command(
         .await
         .unwrap();
     let target_creds = target_role.credentials.unwrap();
+    let user_details = ad_sts_client.get_caller_identity().send().await.unwrap();
 
     let adfs_config = AdfsConfig {
         target_credentials: TargetCredentials::from_aws_creds(&target_creds),
+        account_id: user_details.account,
     };
     let adfs_config_serialized = adfs_config.to_string();
     let mut adfs_config_file = File::create(temp_creds_file).unwrap();
     adfs_config_file
         .write(&adfs_config_serialized.as_bytes())
         .unwrap();
-
-    // it is not possible to source/set env vars for the running shell
-    // IMO this means that the env environment setting must be done in bash
 }
