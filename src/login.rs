@@ -132,6 +132,25 @@ async fn ad_login(
         .await;
 }
 
+async fn get_sts_client(assumed_creds: Option<CredentialsType>) -> aws_sdk_sts::Client {
+    let mut config = aws_config::from_env();
+
+    config = if let Some(assumed_creds) = assumed_creds {
+        let creds = Credentials::from_keys(
+            assumed_creds.access_key_id,
+            assumed_creds.secret_access_key,
+            Some(assumed_creds.session_token),
+        );
+        config.credentials_provider(creds)
+    } else {
+        config
+    };
+
+    let config = config.load().await;
+
+    return aws_sdk_sts::Client::new(&config);
+}
+
 pub async fn login_command(
     ad_url: String,
     temp_creds_file: String,
@@ -188,8 +207,7 @@ pub async fn login_command(
         ),
     };
 
-    let config = aws_config::from_env().region("eu-west-1").load().await;
-    let sts_client = aws_sdk_sts::Client::new(&config);
+    let sts_client = get_sts_client(Option::None).await;
     let assumed_role = sts_client
         .assume_role_with_saml()
         .role_arn(&role.role_arn)
@@ -200,17 +218,7 @@ pub async fn login_command(
         .unwrap();
 
     let assumed_creds = assumed_role.credentials.unwrap();
-    let creds = Credentials::from_keys(
-        assumed_creds.access_key_id,
-        assumed_creds.secret_access_key,
-        Some(assumed_creds.session_token),
-    );
-
-    let ad_config = aws_config::from_env()
-        .credentials_provider(creds)
-        .load()
-        .await;
-    let ad_sts_client = aws_sdk_sts::Client::new(&ad_config);
+    let ad_sts_client = get_sts_client(Some(assumed_creds)).await;
 
     let target_role = ad_sts_client
         .assume_role()
@@ -220,7 +228,13 @@ pub async fn login_command(
         .await
         .unwrap();
     let target_creds = target_role.credentials.unwrap();
-    let user_details = ad_sts_client.get_caller_identity().send().await.unwrap();
+
+    let target_sts_client = get_sts_client(Some(target_creds.clone())).await;
+    let user_details = target_sts_client
+        .get_caller_identity()
+        .send()
+        .await
+        .unwrap();
 
     let adfs_config = AdfsConfig {
         target_credentials: TargetCredentials::from_aws_creds(&target_creds),
